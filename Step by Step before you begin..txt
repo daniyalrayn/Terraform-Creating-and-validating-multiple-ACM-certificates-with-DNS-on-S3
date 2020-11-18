@@ -1,0 +1,522 @@
+Project organization choices
+Terraform uses its own configuration language and uses the file extension *.tf. Our project will have a lot of Terraform configuration. There are several different approaches we could use to organize our Terraform project. These fit into three categories:
+
+Keep all of the configuration in one folder or one file
+Separate the configuration of resources into separate modules
+Control access and permissions to each resource configuration and state individually
+Each of these patterns offer advantages and disadvantages.
+
+Keep all of the configuration in one folder or one file
+Terraform is made up of a series of configuration files, variables, outputs and states. When starting a project, all of this can be kept in a single terraform.tf file:
+
+terraform/
+  |
+  |- terraform.tf
+After you apply your Terraform configuration, a local copy of your state will be created:
+
+terraform/
+  |
+  |- terraform.tf
+  |- terraform.tfstate
+  |- terraform.tfstate.backup
+As your infrastructure grows, however, the number of services and resources you rely on will quickly grow and a single file will become unwieldy. It is possible to separate out each service to a separate file as well as separating out the variables and outputs to separate files. When running, Terraform loads all of the files and treats them as a single configuration and figures out the interdependencies. For example:
+
+terraform/
+  |
+  |- dns.tf
+  |- certs.tf
+  |- email.tf
+  |- storage.tf
+  |- site.tf
+  |- database.tf
+  |- users.tf
+  |- identities.tf
+  |- api.tf
+  |- logging.tf
+  |- variables.tf
+  |- outputs.tf
+  |- terraform.tfstate
+  |- terraform.tfstate.backup
+In this case, it is clear where changes need to be made for specific resources. This makes it easier for developers. Unfortunately is still relies on a single state file even though we’re using separate files. Because of this, when applying the configuration using terraform apply, it will need to check and compare the state of every service. If you have a lot of services this can be slow. If you’re making lots of changes that makes sense. But when making a small change (such as just changing the version of a lambda function) this might not be a good choice.
+
+Separate the configuration of resources into separate modules
+Terraform has a built in module system that works well to separate out your resources. To do this you would create subfolders for each resource. A default terraform.tf file imports the modules and runs them:
+
+terraform/
+  |
+  |- .gitignore
+  |- README.md
+  |- terraform.tf
+  |- terraform.tfstate
+  |- terraform.tfstate.backup
+  |- dns/
+  |   |- main.tf
+  |   |- variables.tf
+  |   |- outputs.tf
+  |- certs/
+  |   |- main.tf
+  |   |- variables.tf
+  |   |- outputs.tf
+  |- email/
+  |   |- main.tf
+  |   |- variables.tf
+  |   |- outputs.tf
+  |- storage/
+  |   |- main.tf
+  |   |- variables.tf
+  |   |- outputs.tf
+  |- site/
+  |   |- main.tf
+  |   |- variables.tf
+  |   |- outputs.tf
+  |- database/
+  |   |- main.tf
+  |   |- variables.tf
+  |   |- outputs.tf
+  |- users/
+  |   |- main.tf
+  |   |- variables.tf
+  |   |- outputs.tf
+  |- identities/
+  |   |- main.tf
+  |   |- variables.tf
+  |   |- outputs.tf
+  |- api/
+  |   |- main.tf
+  |   |- variables.tf
+  |   |- outputs.tf
+  |- logging/
+  |   |- main.tf
+  |   |- variables.tf
+  |   |- outputs.tf
+This is a lot of repeated files and filenames and it is easy to get confused when making changes in an editor (“which main.tf am I editing?”). At the same time, this separation of concerns is very powerful. Normally the modules (subfolders) would not contain configuration specific to your website. Instead the specific names and values would be passed into the modules via variables. Because of this, modules can actually be open source and shared between projects.Cloud Posse maintains a huge set of open source modules that can be used in your project. In many cases using these modules is the right choice if you are looking to follow best practices around specific resources.
+
+Just as we saw in the previous setup, when running terraform apply, Terraform sees all of the modules as a single configuration. Knowing where to make a change is still relatively easy, but each change requires re-applying the entire state for every resource.
+
+Control access and permissions to each resource configuration and state individually
+As your website grows and more developers are working on it, it will not make sense to keep everything in a single file. Likewise, maintaining all of your infrastructure in a single state file can become problematic. As your team grows you’ll have developers that understand networking, others that understand database concerns, some will work on site security, and others will deploy changes to the API and site. You’ll want to restrict access to different parts of the infrastructure. For example:
+
+terraform-dns/
+  |
+  |- README.md
+  |- terraform.tfstate
+  |- terraform.tfstate.backup
+  |- .gitignore
+  |- main.tf
+  |- variables.tf
+  |- outputs.tf
+terraform-database/
+  |
+  |- README.md
+  |- terraform.tfstate
+  |- terraform.tfstate.backup
+  |- .gitignore
+  |- main.tf
+  |- variables.tf
+  |- outputs.tf
+
+...
+In this setup, the Terraform state is managed per-module and each of the modules are kept in separate folders (and, likely, separate repositories). Access to the various services is managed through repository permissions and different IAM policies and roles so that only specific users can make changes to (or even see the configuration for) specific services. This is the most secure and least risky way to manage your infrastructure. Individual developers can’t accidentally make a change or destroy a critical resource if they don’t have access to it.
+
+Unfortunately, this is also the most challenging setup. Making coordinated changes can be extremely cumbersome. For example, suppose you wanted to create an API action that sent an email from a new email sender when an entry was added to a new database table. You would need to coordinate changes to deploy the new database, create the new email address (and wait for verification), and deploy the serverless function. This would require changes to three repositories and at least three separate terraform apply invocations to modify the different services. In a production site with many active users, it makes sense to plan and execute changes like this independently. In a small site with only one or two developers, this level of rigor is probably over-zealous.
+
+Basic project setup
+To keep things simple, we’ll use a basic setup: keeping all of our configuration in a single folder but in separate Terraform files. We’ll also manage our state centrally (even though this may slow down our terraform apply calls because the state of every resource must be checked). To start, we’ll want to create a terraform folder:
+
+mkdir terraform
+cd terraform
+We’ll be using version control so that we can see what changes were made to our infrastructure over time. We’ll want to make sure we aren’t storing any secrets in our repository. Not only will we have secrets in our .tfvars files but Terraform itself will store secrets in its state files. Because of this we need to ensure that they are ignored when using version control. Add a .gitignore:
+
+# Private key files
+*.pem
+
+#  Local .terraform directories
+**/.terraform/*
+
+# .tfstate files
+*.tfstate
+*.tfstate.*
+
+# .tfvars files
+*.tfvars
+Variables
+Most of the configuration we’ll create will be generic. In fact, it could easily be repurposed for multiple websites with only a few small changes. Unfortunately, those small changes will be scattered across our configuration files. Terraform allows you to declare and use variables to simplify this. In the terraform folder create a new file called variables.tf:
+
+variable "region" {
+  default = "us-east-1"
+}
+
+variable "domain" {
+  default = "example.com"
+}
+We’ll use these variables as we write our configuration. For more information, see the Terraform documentation on input variables.
+
+Collaboration and remote backends
+Terraform tracks the last-known state for your configuration in the terraform.tfstate and terraform.tfstate.backup files. Terraform compares the stored state and configuration with what exists in the cloud. Running terraform apply repeatedly should not make any changes. If we make a change to our configuration files and then run terraform apply it will check the local state and apply the changes without completely recreating the resource. Because of this, the stateFor more information on how Terraform uses state files, see https://thorsten-hans.com/terraform-state-demystified. files are extremely important.
+
+Even though they are important, the state files aren’t tracked in our repository (we’ve ignored them in the .gitignore). We don’t want to store them in our repository because they will contain secrets which shouldn’t be pushed to GitHub. But what happens if another developer on our team clones our repository without the state files and runs terraform apply? In some cases this can be bad - destroying and recreating resources that haven’t changed; in other cases it is just slow. We could make the assumption that we’re the only person working on our configuration via Terraform. Unfortunately, once you have multiple devices or multiple developers that assumption becomes very problematic.
+
+Because of this we don’t want to keep our state locally; instead, we’ll move it to a shared, secure location and make sure it is encrypted.
+
+To do this we’ll rely on Terraform’s remote backends to share our state. Because we are already using AWS as our cloud provider, we’ll use the S3 backend. We’ll create an S3 bucket solely for the purpose of sharing state among our developers. Again, if we had chosen a more complex setup (where we were keeping the state for each service separately) we could use multiple buckets or restrict access to the shared state by key using specific IAM policies. For more detail you can refer to https://codethat.today/tutorial/terraform-remote-state-for-collaboration/ and https://medium.com/@jessgreb01/how-to-terraform-locking-state-in-s3-2dc9a5665cb6.
+
+Unsurprisingly, we’ll use Terraform to setup our remote backend. To do this we’ll need to configure three things:
+
+Choose a cloud provider
+Create an S3 bucket to store the state
+Configure the remote state
+To start, we’ll set the provider. Again, for this post we’ll be using AWS, so we’ll configure that in Terraform, In the terraform folder, create a new file called aws.tf:
+
+# Setup the provider for this Terraform instance
+provider "aws" {
+  region  = var.region
+}
+Notice that the value for the region uses a variable interpolation.
+
+Even though we configured awscli with our chosen region us-east-1, we still need to set the region in the provider block. This should be unnecessary but because of how Terraform connects to providers we must include it again.
+
+We’ll need to create an S3 bucket that will hold the state. Because S3 bucket names are global you’ll need to choose a unique name. To make sure my bucket name is unique, I generally use my domain name (without the .com) as a prefix and add -state. For example: example-state. Create a new variable by adding the following to variables.tf (replacing example with your name):
+
+variable "state_bucket" {
+  default = "example-state"
+}
+Next, create a new file called storage.tf in the terraform folder:
+
+# Create a bucket to for remotely tracking Terraform state
+resource "aws_s3_bucket" "state" {
+  bucket = var.state_bucket
+  acl    = "private"
+
+  versioning {
+    enabled = true
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+We’ve enabled versioning for the bucket (as well as turning on prevent_destroy). Though not required, this is highly recommended. Save storage.tf and run the following command (from within the terraform folder):
+
+terraform init
+If you are using an awscli profile (as noted above) you’ll need to make sure you’ve exported the AWS_PROFILE environment variable. On a Mac, you can even do this as part of the command, i.e, AWS_PROFILE=example terraform init.
+
+You should see:
+
+Initializing the backend...
+
+Initializing provider plugins...
+- Checking for available provider plugins...
+- Downloading plugin for provider "aws" (hashicorp/aws) 3.7.0...
+
+The following providers do not have any version constraints in configuration,
+so the latest version was installed.
+
+To prevent automatic upgrades to new major versions that may contain breaking
+changes, it is recommended to add version = "..." constraints to the
+corresponding provider blocks in configuration, with the constraint strings
+suggested below.
+
+* provider.aws: version = "~> 3.7"
+
+Terraform has been successfully initialized!
+
+You may now begin working with Terraform. Try running "terraform plan" to see
+any changes that are required for your infrastructure. All Terraform commands
+should now work.
+
+If you ever set or change modules or backend configuration for Terraform,
+rerun this command to reinitialize your working directory. If you forget, other
+commands will detect it and remind you to do so if necessary.
+Don’t worry if your version is different. To make sure everything is correct we’ll verify the plan. Terraform will read the configuration and create a plan for the changes it needs to make. Creating the plan doesn’t make any changes to the AWS instance, it just shows the plan:
+
+terraform plan
+It should show the details of the S3 bucket it will create. We could save the plan to a file and re-use it later but we don’t need to do that right now. If everything looks right, go ahead and apply it (this will actually make changes):
+
+terraform apply
+Answer yesEventually, you may want to automate your infrastructure. If you are running the commands from your continuous integration for example, typing yes will be problematic. You can skip the prompt by adding the -auto-approve flag. and your S3 bucket should be created.
+
+Notice that Terraform has created new file called terraform.tfstate (and possibly terraform.tfstate.backup).
+
+Again, because Terraform is tracking the state, if we re-run terraform apply, it will not make any changes to our S3 bucket on AWS. If we make a change to our configuration (like adding a policy, for example) it can apply the changes without destroying and recreating the bucket. As mentioned above, we don’t want to keep our state locally, so we’ll move it to the remote backend (the S3 bucket we just created) by configuring it in Terraform.
+
+Create a new fileTerraform will still work even though we're splitting our configuration across multiple files. Terraform will read all of the *.tf files in the current folder when it is run. The order of your declarations doesn't matter. Terraform will do its best to determine the order things should be created or applied based on the interdependencies in the declarations. called state.tf in the terraform folder:
+
+# Indicate how state should be managed
+terraform {
+  backend "s3" {
+    region  = "us-east-1"
+    bucket  = "example-state"
+    key     = "terraform"
+    encrypt = true
+  }
+}
+Again we’ll want to set the bucket value to the name of the bucket we’ve just created (replace example-state with your chosen name).
+
+Wait - why aren’t we using var.region and var.state_bucket variables? Terraform reads the values for the backend resource very early in its lifecycle; because of this you cannot use variable interpolations and it cannot utilize the values in the provider node. All of the values need to be redeclared as shown.
+
+With this new configuration in place we can check the plan:
+
+terraform plan
+You should see:
+
+Backend reinitialization required. Please run "terraform init".
+Reason: Initial configuration of the requested backend "s3"
+
+The "backend" is the interface that Terraform uses to store state,
+perform operations, etc. If this message is showing up, it means that the
+Terraform configuration you're using is using a custom configuration for
+the Terraform backend.
+
+Changes to backend configurations require reinitialization. This allows
+Terraform to setup the new configuration, copy existing state, etc. This is
+only done during "terraform init". Please run that command now then try again.
+
+If the change reason above is incorrect, please verify your configuration
+hasn't changed and try again. At this point, no changes to your existing
+configuration or state have been made.
+
+Failed to load backend: Initialization required. Please see the error message above.
+Terraform has detected that we want to change the location of our state. In this case we’ll do what it suggests:
+
+terraform init
+You should see:
+
+Initializing the backend...
+Do you want to copy existing state to the new backend?
+  Pre-existing state was found while migrating the previous "local" backend to the
+  newly configured "s3" backend. No existing state was found in the newly
+  configured "s3" backend. Do you want to copy this state to the new "s3"
+  backend? Enter "yes" to copy and "no" to start with an empty state.
+
+  Enter a value:
+Type yes and press enter:
+
+Successfully configured the backend "s3"! Terraform will automatically
+use this backend unless the backend configuration changes.
+
+Initializing provider plugins...
+
+The following providers do not have any version constraints in configuration,
+so the latest version was installed.
+
+To prevent automatic upgrades to new major versions that may contain breaking
+changes, it is recommended to add version = "..." constraints to the
+corresponding provider blocks in configuration, with the constraint strings
+suggested below.
+
+* provider.aws: version = "~> 3.7"
+
+Terraform has been successfully initialized!
+
+You may now begin working with Terraform. Try running "terraform plan" to see
+any changes that are required for your infrastructure. All Terraform commands
+should now work.
+
+If you ever set or change modules or backend configuration for Terraform,
+rerun this command to reinitialize your working directory. If you forget, other
+commands will detect it and remind you to do so if necessary.
+If you’re working with an older version, you may see the following error:
+
+Initializing the backend...
+Error inspecting states in the "s3" backend:
+    AccessDenied: Access Denied
+	status code: 403, request id: ABCDEF123456789, host id: ABCDEF123456789/ABCDEF123456789+ABCDEF123456789=
+
+Prior to changing backends, Terraform inspects the source and destination
+states to determine what kind of migration steps need to be taken, if any.
+Terraform failed to load the states. The data in both the source and the
+destination remain unmodified. Please resolve the above error and try again.
+If you see this error, upgrade Terraform or follow the instructions in the appendix.
+
+If we run terraform plan again we should see that everything is up to date:
+
+Refreshing Terraform state in-memory prior to plan...
+The refreshed state will be used to calculate this plan, but will not be
+persisted to local or remote state storage.
+
+aws_s3_bucket.state: Refreshing state... (ID: example-state)
+
+------------------------------------------------------------------------
+
+No changes. Infrastructure is up-to-date.
+
+This means that Terraform did not detect any differences between your
+configuration and real physical resources that exist. As a result, no
+actions need to be performed.
+With the state moved to the remote backend, the local terraform.tfstate and terraform.tfstate.backup files are no longer needed and can be safely deleted.
+
+rm terraform.tfstate
+rm terraform.tfstate.backup
+That’s a lot of setup; but at this point we’re ready to start building out the main resources for our application and, ideally, we won’t need to configure anything else in the AWS console directly.
+
+Note: we could go even further and introduce remote-state locking (see https://dev.to/theodesp/using-terraform-remote-state-for-collaboration-4661). For now we’ll assume that only one developer will be deploying at a time. Ultimately, we’ll want to move our infrastructure management into our continuous deployment tooling; at that point locking will need to be managed differently.
+
+DNS
+We’ll want to use our own domain for everything: our site, our email, and our API. Domain configuration is controlled through a domain’s nameservers. There are a number of options available for managing your DNS nameservers and entries. You could choose to use the default nameservers provided by the service where you purchased your domain (such as Google Domains). You could also use Cloudflare which provides a built-in CDN, shared SSL certificates, and DOS protection (and is free for the basic plan). You can also use Route53 which is part of AWS.
+
+In our case, we’ll use Route53 as it is easily configurable in Terraform and makes some of our service approvals automatic. This is the first thing we’ll use that costs money. Creating a zone costs $0.50 per hosted zone per month and is charged immediately (it is not prorated). For larger sites with many zones responding to many queries it is possible the cost could go up; but because we’ll be pointing to other AWS services we should only need one zone and our costs shouldn’t go up..
+
+Actually, if you destroy the zone within 12 hours of creation the cost of the zone will be refunded.
+
+We’ll start with our primary zone configuration and nameservers. Within the terraform directory create a new file, dns.tf:
+
+# Define the primary zone for our domain
+resource "aws_route53_zone" "domain_zone" {
+  name = var.domain
+}
+
+# Create the nameservers for our domain
+resource "aws_route53_record" "domain_nameservers" {
+  zone_id         = aws_route53_zone.domain_zone.zone_id
+  name            = aws_route53_zone.domain_zone.name
+  type            = "NS"
+  ttl             = "30"
+  allow_overwrite = true
+
+  records = [
+    aws_route53_zone.domain_zone.name_servers.0,
+    aws_route53_zone.domain_zone.name_servers.1,
+    aws_route53_zone.domain_zone.name_servers.2,
+    aws_route53_zone.domain_zone.name_servers.3,
+  ]
+}
+We’ve configured the name of our zone using a variable. We’ve already setup the domain variable in variables.tf. Your domain name should be set to the root domain name (such as example.com) and should not include the subdomain. For example, do not include www or the protocol https.
+
+Notice that we have set a very short ttl (Time-to-live). This controls how long DNS servers (and browsers) should cache your domain after looking it up. Setting a very short time like this (30 seconds) makes it much faster to make changes without needing to wait a long time for propagation. However, it also increases the number of requests that users need to make (and that AWS needs to serve). Long-term, we’ll want to change this to 300 or 600 (5 minutes or 10 minutes).
+
+We’ve also specified allow_overwrite. When the nameservers are created, Terraform automatically generates NS and SOA entries by default. We want to allow those entries to be set in our state (overwriting anything that might already be present).
+
+With this setup, we can check the plan:
+
+terraform plan
+According to the plan we’ll add a zone and setup the nameservers. Let’s apply it:
+
+terraform apply
+When prompted, answer yes:
+
+aws_s3_bucket.state: Refreshing state... [id=example-state]
+
+An execution plan has been generated and is shown below.
+Resource actions are indicated with the following symbols:
+  + create
+
+Terraform will perform the following actions:
+
+  # aws_route53_record.domain_nameservers will be created
+  + resource "aws_route53_record" "domain_nameservers" {
+      + allow_overwrite = true
+      + fqdn            = (known after apply)
+      + id              = (known after apply)
+      + name            = "example.com"
+      + records         = (known after apply)
+      + ttl             = 30
+      + type            = "NS"
+      + zone_id         = (known after apply)
+    }
+
+  # aws_route53_zone.domain_zone will be created
+  + resource "aws_route53_zone" "domain_zone" {
+      + comment       = "Managed by Terraform"
+      + force_destroy = false
+      + id            = (known after apply)
+      + name          = "example.com"
+      + name_servers  = (known after apply)
+      + zone_id       = (known after apply)
+    }
+
+Plan: 2 to add, 0 to change, 0 to destroy.
+
+Do you want to perform these actions?
+  Terraform will perform the actions described above.
+  Only 'yes' will be accepted to approve.
+
+  Enter a value: yes
+
+aws_route53_zone.domain_zone: Creating...
+aws_route53_zone.domain_zone: Still creating... [10s elapsed]
+aws_route53_zone.domain_zone: Still creating... [20s elapsed]
+aws_route53_zone.domain_zone: Still creating... [30s elapsed]
+aws_route53_zone.domain_zone: Creation complete after 35s [id=REDACTED]
+aws_route53_record.domain_nameservers: Creating...
+aws_route53_record.domain_nameservers: Still creating... [10s elapsed]
+aws_route53_record.domain_nameservers: Still creating... [20s elapsed]
+aws_route53_record.domain_nameservers: Still creating... [30s elapsed]
+aws_route53_record.domain_nameservers: Creation complete after 34s [id=REDACTED_example.com_NS]
+
+Apply complete! Resources: 2 added, 0 changed, 0 destroyed.
+The primary zone and nameserver entries should be created. Now that the nameservers have been created we’ll need to fetch them. Run:
+
+terraform state show aws_route53_record.domain_nameservers
+In the output you should see the list of nameservers:
+
+...
+records         = [
+    "ns-1283.awsdns-32.org",
+    "ns-1574.awsdns-04.co.uk",
+    "ns-492.awsdns-61.com",
+    "ns-862.awsdns-43.net",
+]
+...
+These nameservers are just an example; the nameservers listed for your zone will be different.
+
+We’ll need to copy these values so that we can set the nameservers our domain registrar points to.Be careful: at this point our Route53 configuration is completely empty. For a new domain that's probably fine. If you've added DNS entries to your current nameservers (or if there are default entries managed by your registrar) these will no longer be set. For example, if you've setup an email alias (as described earlier) your existing DNS configuration likely has an MX record denoting it. We'll fix this later but if you are relying on your current setup, you should proceed cautiously.
+
+Add the nameserver entries to Google Domains
+
+Once saved, you’ll need to wait for the changes to propagate through DNS. This can take up to 48 hours; however I find this usually happens much faster (sometimes as fast as 5 minutes). If you want to check what nameservers are reported for your domain run:
+
+ dig +short NS example.com
+If the DNS has fully propagated the answer should match the nameservers listed above. You’ll need to wait for this before proceeding.
+
+Certs
+Once your DNS is setup to point at Route53 you’ll want to create a certificate for securing communications with your domain (SSL/TLS). To do this we will use AWS Certificate Manager (acm). Luckily, public certificates are free:
+
+From the AWS Certificate Manager pricing page: “Public SSL/TLS certificates provisioned through AWS Certificate Manager are free. You pay only for the AWS resources you create to run your application.”
+
+Create a new file in the terraform folder called cert.tf:
+
+# An ACM certificate is needed to apply a custom domain name
+# to the API Gateway resource and cloudfront distributions
+resource "aws_acm_certificate" "cert" {
+  domain_name       = aws_route53_zone.domain_zone.name
+  validation_method = "DNS"
+
+  subject_alternative_names = [
+    "*.${aws_route53_zone.domain_zone.name}",
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# AWS needs to verify that we own the domain; to prove this we will create a
+# DNS entry with a validation code
+resource "aws_route53_record" "cert_validation_record" {
+  name    = tolist(aws_acm_certificate.cert.domain_validation_options)[0].resource_record_name
+  type    = tolist(aws_acm_certificate.cert.domain_validation_options)[0].resource_record_type
+  records = [tolist(aws_acm_certificate.cert.domain_validation_options)[0].resource_record_value]
+  zone_id = aws_route53_zone.domain_zone.zone_id
+  ttl     = 60
+}
+
+resource "aws_acm_certificate_validation" "cert_validation" {
+  certificate_arn         = aws_acm_certificate.cert.arn
+  validation_record_fqdns = [aws_route53_record.cert_validation_record.fqdn]
+}
+We’ve created three resources:
+
+A new acm certificate for our domain name
+A DNS record for domain ownership validation
+A certificate validation that connects the two
+When generating a secure certificate for a domain; the certificate authority must ensure that you are the owner of the domain. To validate this, a DNS record is added to prove you are in control of the domain. We’ll use Terraform to generate the entry and AWS will validate it and generate the certificate. Luckily, because we’re using Route53 for our domain, this validation is almost instantaneous. If you are utilizing another nameserver, you’ll need to wait on propagation.
+
+Notice that we’ve set our domain_name to aws_route53_zone.domain_zone.name. This is an value which uses the name we already entered in our domain_zone. Technically the domain_zone domain name has an extra . at the end of the name but Terraform is smart enough to remove that. Creating interdependencies between your resources makes it easier to make changes in the future because there is less to change.
+
+Check the plan:
+
+terraform plan
+And if it looks right, apply it:
+
+terraform apply
+This might take a few minutes to complete.
