@@ -7,7 +7,11 @@ resource "aws_acm_certificate" "cert" {
   subject_alternative_names = [
     "*.${aws_route53_zone.domain_zone.name}",
   ]
-
+  tags = {
+   Name = "Ligero Coder"
+   Environment = "Production"
+   CreatedTime = timestamp() 
+  }
   lifecycle {
     create_before_destroy = true
   }
